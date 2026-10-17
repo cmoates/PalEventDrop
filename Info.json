@@ -1,0 +1,15 @@
+{
+  "ModName": "PalMaildir",
+  "PackageName": "PalMaildir",
+  "Version": "1.0.0",
+  "Author": "Chris Moates",
+  "Description": "Maildir-style message bus for UE4SS (drop JSON into Saved/PalMaildir/new). Load before consumer mods.",
+  "Dependencies": ["UE4SSExperimentalPW"],
+  "Tags": ["UE4SS", "Library"],
+  "InstallRule": [
+    {
+      "Type": "Lua",
+      "Targets": ["./Scripts"]
+    }
+  ]
+}
