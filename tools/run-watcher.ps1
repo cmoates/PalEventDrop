@@ -1,14 +1,13 @@
-# Run PalEventDrop watcher with Infisical (adjust path/env if needed).
+# Run PalEventDrop watcher (Infisical optional; else watcher-config.json or env).
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
 if (Get-Command infisical -ErrorAction SilentlyContinue) {
-    infisical run --env=prod --path=/matrix -- python tools/event-watcher.py
+    # Store DISCORD_WEBHOOK_URL in Infisical (e.g. path /palworld). Override with INFISICAL_PATH.
+    $path = if ($env:INFISICAL_PATH) { $env:INFISICAL_PATH } else { "/palworld" }
+    infisical run --env=prod --path=$path -- python tools/event-watcher.py
     exit $LASTEXITCODE
 }
 
-if (-not $env:APPRISE_API_KEY) {
-    Write-Error "Set APPRISE_API_KEY or install Infisical CLI (see README)."
-}
 python tools/event-watcher.py

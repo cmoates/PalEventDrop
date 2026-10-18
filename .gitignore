@@ -1,6 +1,9 @@
-dist/
-__pycache__/
-*.pyc
-.env
-.env.*
+dist/
+__pycache__/
+*.pyc
+.env
+.env.*
+watcher-config.json
+**/watcher-config.json
+!tools/watcher-config.example.json
 

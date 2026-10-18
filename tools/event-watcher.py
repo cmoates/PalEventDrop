@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll PalEventDrop pending/ and POST events to Apprise (Matrix)."""
+"""Poll PalEventDrop pending/ and POST events to a Discord channel webhook."""
 
 from __future__ import annotations
 
@@ -11,10 +11,11 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 DEFAULT_ROOT = Path(os.environ.get("LOCALAPPDATA", "")) / "Pal" / "Saved" / "PalEventDrop"
 DEFAULT_STATE = DEFAULT_ROOT / "watcher-state.json"
-DEFAULT_URL = "https://apprise.moat.es/notify/palworld"
+DEFAULT_CONFIG_NAME = "watcher-config.json"
 POLL_SECONDS = 1.0
 MAX_SENT_IDS = 500
 
@@ -37,6 +38,64 @@ def ensure_dirs(root: Path) -> tuple[Path, Path, Path]:
     return pending_dir, done_dir, failed_dir
 
 
+def config_file_candidates(root: Path) -> list[Path]:
+    custom = env("PALEVENTDROP_WATCHER_CONFIG")
+    paths: list[Path] = []
+    if custom:
+        paths.append(Path(custom))
+    paths.append(root / DEFAULT_CONFIG_NAME)
+    return paths
+
+
+def load_config_file(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError("config root must be a JSON object")
+    return data
+
+
+def resolve_watcher_config(root: Path) -> tuple[str, str | None]:
+    """Return (discord_webhook_url, optional username). Env overrides file."""
+    webhook = env("DISCORD_WEBHOOK_URL")
+    username = env("DISCORD_WEBHOOK_USERNAME")
+
+    file_data: dict[str, Any] = {}
+    config_path: Path | None = None
+    for candidate in config_file_candidates(root):
+        if candidate.is_file():
+            try:
+                file_data = load_config_file(candidate)
+                config_path = candidate
+                break
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                raise RuntimeError(f"invalid watcher config {candidate}: {exc}") from exc
+
+    if not webhook:
+        raw = file_data.get("discord_webhook_url") or file_data.get("webhook_url")
+        if isinstance(raw, str) and raw.strip():
+            webhook = raw.strip()
+
+    if not username:
+        raw = file_data.get("discord_username") or file_data.get("username")
+        if isinstance(raw, str) and raw.strip():
+            username = raw.strip()
+
+    if not webhook:
+        paths = ", ".join(str(p) for p in config_file_candidates(root))
+        raise RuntimeError(
+            "Discord webhook not configured. Set DISCORD_WEBHOOK_URL (Infisical or env) "
+            f"or create watcher-config.json with discord_webhook_url. Tried: {paths}"
+        )
+
+    if "discord.com/api/webhooks/" not in webhook:
+        raise RuntimeError("discord_webhook_url does not look like a Discord webhook URL")
+
+    if config_path and not env("DISCORD_WEBHOOK_URL"):
+        print(f"[event-watcher] config={config_path}")
+
+    return webhook, username
+
+
 def load_state(path: Path) -> dict:
     if not path.is_file():
         return {"sent_ids": []}
@@ -56,15 +115,26 @@ def save_state(path: Path, state: dict) -> None:
     tmp.replace(path)
 
 
-def post_apprise(url: str, token: str, title: str, message: str) -> None:
-    body = json.dumps({"title": title, "body": message, "format": "text"}).encode("utf-8")
+def post_discord(webhook_url: str, title: str, message: str, username: str | None) -> None:
+    body: dict[str, Any] = {
+        "embeds": [
+            {
+                "title": title[:256],
+                "description": message[:4096],
+            }
+        ],
+    }
+    if username:
+        body["username"] = username[:80]
+
+    data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        url,
-        data=body,
+        webhook_url,
+        data=data,
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
+            "User-Agent": "PalEventDrop-watcher",
         },
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
@@ -77,7 +147,7 @@ def list_pending(pending_dir: Path) -> list[Path]:
     files = [
         p
         for p in pending_dir.glob("*.json")
-        if p.is_file() and not p.name.endswith(".tmp")
+        if p.is_file() and not p.name.endswith(".tmp") and p.stat().st_size > 0
     ]
     return sorted(files, key=lambda p: p.name)
 
@@ -86,16 +156,26 @@ def process_file(
     path: Path,
     done_dir: Path,
     failed_dir: Path,
-    url: str,
-    token: str,
+    webhook_url: str,
+    username: str | None,
     state: dict,
 ) -> None:
     try:
-        event = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        print(f"[event-watcher] read failed {path.name}: {exc}", file=sys.stderr)
+        return
+
+    if not raw.strip():
+        return
+
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError as exc:
         print(f"[event-watcher] bad json {path.name}: {exc}", file=sys.stderr)
         dest = failed_dir / path.name
-        shutil.move(str(path), str(dest))
+        if path.exists():
+            shutil.move(str(path), str(dest))
         return
 
     event_id = str(event.get("id") or "")
@@ -112,9 +192,9 @@ def process_file(
         message = f"[{source}] {message}"
 
     try:
-        post_apprise(url, token, title, message)
+        post_discord(webhook_url, title, message, username)
     except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-        print(f"[event-watcher] notify failed {path.name}: {exc}", file=sys.stderr)
+        print(f"[event-watcher] discord failed {path.name}: {exc}", file=sys.stderr)
         dest = failed_dir / path.name
         if path.exists():
             shutil.move(str(path), str(dest))
@@ -132,15 +212,15 @@ def process_file(
 def poll_once(
     root: Path,
     state_path: Path,
-    url: str,
-    token: str,
+    webhook_url: str,
+    username: str | None,
 ) -> None:
     pending_dir, done_dir, failed_dir = ensure_dirs(root)
     state = load_state(state_path)
 
     for path in list_pending(pending_dir):
         try:
-            process_file(path, done_dir, failed_dir, url, token, state)
+            process_file(path, done_dir, failed_dir, webhook_url, username, state)
         except OSError as exc:
             print(f"[event-watcher] io error {path.name}: {exc}", file=sys.stderr)
 
@@ -150,23 +230,27 @@ def poll_once(
 def main() -> int:
     root = Path(env("PALEVENTDROP_ROOT", str(DEFAULT_ROOT)))
     state_path = Path(env("PALEVENTDROP_STATE", str(DEFAULT_STATE)))
-    url = env("APPRISE_NOTIFY_URL", DEFAULT_URL)
-    token = env("APPRISE_API_KEY")
 
-    if not token:
+    try:
+        webhook_url, username = resolve_watcher_config(root)
+    except RuntimeError as exc:
+        print(f"[event-watcher] {exc}", file=sys.stderr)
         print(
-            "Set APPRISE_API_KEY (Infisical: /matrix/APPRISE_API_KEY). "
-            "Example: infisical run --env=prod --path=/matrix -- python tools/event-watcher.py",
+            "Infisical example: infisical run --env=prod --path=/palworld -- python tools/event-watcher.py",
+            file=sys.stderr,
+        )
+        print(
+            f"Config example: copy tools/watcher-config.example.json to {root / DEFAULT_CONFIG_NAME}",
             file=sys.stderr,
         )
         return 1
 
     ensure_dirs(root)
     print(f"[event-watcher] events={root}")
-    print(f"[event-watcher] apprise={url}")
+    print("[event-watcher] notify=discord (webhook)")
 
     while True:
-        poll_once(root, state_path, url, token)
+        poll_once(root, state_path, webhook_url, username)
         time.sleep(POLL_SECONDS)
 
 

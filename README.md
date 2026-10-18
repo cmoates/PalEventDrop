@@ -4,12 +4,14 @@
 
 UE4SS **library mod** for [Palworld](https://store.steampowered.com/app/1623730/Palworld/). Producer mods call `_G.PalEventDrop.publish(event)`; each event becomes one JSON file in a **pending** folder on disk (atomic write, no locking between mods).
 
-A small **Python watcher** on your gaming PC reads those files, sends notifications (e.g. Apprise → Matrix), then moves them to **done**.
+A small **Python watcher** on your gaming PC reads those files, posts to a **Discord channel webhook**, then moves them to **done**.
 
 ## Requirements
 
 - [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) (Palworld experimental build)
 - Palworld with UE4SS Lua mods enabled
+- Python 3.10+ on the PC where you run the watcher
+- A Discord **channel webhook** ([create one](https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks) in Server Settings → Integrations)
 
 ## Install
 
@@ -43,31 +45,58 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for folder layout, schema, and 
 
 ## Watcher (gaming PC)
 
-Default root: `%LOCALAPPDATA%\Pal\Saved\PalEventDrop\` with subfolders `pending/`, `done/`, `failed/`.
+Default event root: `%LOCALAPPDATA%\Pal\Saved\PalEventDrop\` (`pending/`, `done/`, `failed/`).
+
+### Discord webhook (pick one)
+
+**A — Config file (no Infisical)** — copy the example and edit:
 
 ```powershell
-cd path\to\PalEventDrop
-infisical run --env=prod --path=/matrix -- python tools\event-watcher.py
+Copy-Item tools\watcher-config.example.json "$env:LOCALAPPDATA\Pal\Saved\PalEventDrop\watcher-config.json"
+# Edit watcher-config.json and paste your webhook URL (keep this file private; do not commit it)
 ```
 
-| Variable | Default |
-|----------|---------|
-| `PALEVENTDROP_ROOT` | `%LOCALAPPDATA%\Pal\Saved\PalEventDrop` |
-| `PALEVENTDROP_STATE` | `...\PalEventDrop\watcher-state.json` |
-| `APPRISE_NOTIFY_URL` | `https://apprise.moat.es/notify/palworld` |
-| `APPRISE_API_KEY` | required |
+**B — Environment variable**
 
-Homelab Apprise/Matrix setup: [docs/homelab.md](docs/homelab.md). Optional wrapper: `tools/run-watcher.ps1`.
+```powershell
+$env:DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/..."
+python tools\event-watcher.py
+```
+
+**C — Infisical** (optional): store `DISCORD_WEBHOOK_URL` under e.g. `/palworld`, then:
+
+```powershell
+.\tools\run-watcher.ps1
+```
+
+Or: `infisical run --env=prod --path=/palworld -- python tools\event-watcher.py`
+
+Env overrides config file. Config path override: `PALEVENTDROP_WATCHER_CONFIG`.
+
+| Variable | Purpose |
+|----------|---------|
+| `DISCORD_WEBHOOK_URL` | Discord channel webhook (preferred via Infisical or env) |
+| `DISCORD_WEBHOOK_USERNAME` | Optional display name for webhook posts |
+| `PALEVENTDROP_ROOT` | Event folder root (default `%LOCALAPPDATA%\Pal\Saved\PalEventDrop`) |
+| `PALEVENTDROP_STATE` | Idempotency state file (default `...\watcher-state.json`) |
+| `PALEVENTDROP_WATCHER_CONFIG` | Path to JSON config if not using default under event root |
+| `INFISICAL_PATH` | Infisical secret path for `run-watcher.ps1` (default `/palworld`) |
+
+**Never commit webhook URLs** — they are full channel write credentials.
 
 ## Test drop (no game)
 
-With the watcher running, create a file in `pending/`:
+With the watcher running:
+
+```powershell
+.\tools\write-test-event.ps1
+```
+
+Or paste JSON into a **new** file under `pending/` and save once (do not leave a 0-byte file while the watcher is running). Example body:
 
 ```json
 {"schema":1,"id":"test-1","ts":"2026-01-01T00:00:00Z","source":"manual","type":"test","title":"Test","message":"Hello","payload":{}}
 ```
-
-Use a unique filename such as `0000000001_test.json`.
 
 ## Writing a producer mod
 
