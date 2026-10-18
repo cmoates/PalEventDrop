@@ -8,7 +8,7 @@ Split **transport** from **producers**:
 |-------|-----|----------------|
 | Bus | **PalMaildir** | `_G.PalMaildir.publish(event)` → one file under `new/` |
 | Producer | **PalNotifyExpedition** (example) | Game hooks → publish typed events |
-| Consumer | **palnotify-watcher.py** (on PC) | Scan `new/`, notify Apprise, move to `proc/` |
+| Consumer | **palmail-watcher.py** (on PC) | Scan `new/`, notify Apprise, move to `proc/` |
 
 Other authors ship their own producer mods (treasure, base raid, egg hatch) without copying file I/O.
 
@@ -64,10 +64,6 @@ Returns `id, err` from `publish` (pcall-safe; check err).
 - POST notification; on success move to `proc/`.
 - Idempotent: skip if `id` already in watcher state.
 
-## Why not JSONL or single mbox?
+## Why maildir-style drops
 
-| Pattern | Issue for many mods |
-|---------|---------------------|
-| Single mbox file | One in flight; races on rewrite |
-| JSONL append | Works, but one growing file; harder to archive per event |
-| Maildir drops | Independent files; natural multi-producer; watcher lists on OS side |
+Independent files under `new/` mean multiple producer mods can write without coordination. The game side only does atomic create/rename; the OS-side watcher lists and moves files after delivery.

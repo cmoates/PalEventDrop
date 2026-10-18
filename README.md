@@ -56,6 +56,8 @@ infisical run --env=prod --path=/matrix -- python tools\palmail-watcher.py
 | `APPRISE_NOTIFY_URL` | `https://apprise.moat.es/notify/palworld` |
 | `APPRISE_API_KEY` | required |
 
+Homelab Apprise/Matrix setup: [docs/homelab.md](docs/homelab.md). Optional wrapper: `tools/run-watcher.ps1`.
+
 ## Test drop (no game)
 
 With the watcher running, create a file in `new/`:
