@@ -7,7 +7,7 @@ Split **transport** from **producers**:
 | Layer | Mod | Responsibility |
 |-------|-----|----------------|
 | Bus | **PalMaildir** | `_G.PalMaildir.publish(event)` → one file under `new/` |
-| Producer | **PalNotifyExpedition** (example) | Game hooks → publish typed events |
+| Producer | **ExpeditionNotifier** (example) | Game hooks → publish typed events |
 | Consumer | **palmail-watcher.py** (on PC) | Scan `new/`, notify Apprise, move to `proc/` |
 
 Other authors ship their own producer mods (treasure, base raid, egg hatch) without copying file I/O.
@@ -30,7 +30,7 @@ Writers never read directories (UE4SS Lua cannot list dirs reliably). Unique fil
   "schema": 1,
   "id": "hex-seq-rand",
   "ts": "2026-10-17T22:00:00Z",
-  "source": "PalNotifyExpedition",
+  "source": "ExpeditionNotifier",
   "type": "expedition_complete",
   "title": "Expedition complete",
   "message": "…",

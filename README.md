@@ -25,7 +25,7 @@ Enable **before** any producer mod in `mods.txt`:
 PalMaildir : 1
 ```
 
-Example producer: **PalNotifyExpedition** (expedition-complete notifications; separate mod that depends on this library).
+Example producer: **[ExpeditionNotifier](https://github.com/cmoates/ExpeditionNotifier)** (expedition-complete notifications; separate mod that depends on this library).
 ## Producer API
 
 ```lua
