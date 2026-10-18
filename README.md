@@ -1,10 +1,10 @@
-# PalMaildir
+# PalEventDrop
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-UE4SS **library mod** for [Palworld](https://store.steampowered.com/app/1623730/Palworld/). Producers call `_G.PalMaildir.publish(event)`; each event becomes one JSON file under a **maildir-style** `new/` folder (atomic write, no locking between mods).
+UE4SS **library mod** for [Palworld](https://store.steampowered.com/app/1623730/Palworld/). Producer mods call `_G.PalEventDrop.publish(event)`; each event becomes one JSON file in a **pending** folder on disk (atomic write, no locking between mods).
 
-External tools (see `tools/palmail-watcher.py`) move delivered files to `proc/` and notify Apprise/Matrix (or any other consumer you write).
+A small **Python watcher** on your gaming PC reads those files, sends notifications (e.g. Apprise → Matrix), then moves them to **done**.
 
 ## Requirements
 
@@ -13,23 +13,24 @@ External tools (see `tools/palmail-watcher.py`) move delivered files to `proc/` 
 
 ## Install
 
-Clone or download this repo, then copy `PalMaildir/` (this folder’s contents: `Scripts/`, `Info.json`, etc.) to:
+Clone or download this repo, then copy this folder’s contents (`Scripts/`, `Info.json`, etc.) to:
 
 ```
-Palworld/Pal/Binaries/Win64/ue4ss/Mods/PalMaildir/
+Palworld/Pal/Binaries/Win64/ue4ss/Mods/PalEventDrop/
 ```
 
 Enable **before** any producer mod in `mods.txt`:
 
 ```txt
-PalMaildir : 1
+PalEventDrop : 1
 ```
 
-Example producer: **[ExpeditionNotifier](https://github.com/cmoates/ExpeditionNotifier)** (expedition-complete notifications; separate mod that depends on this library).
+Example producer: **[ExpeditionNotifier](https://github.com/cmoates/ExpeditionNotifier)** (expedition-complete notifications).
+
 ## Producer API
 
 ```lua
-local id, err = _G.PalMaildir.publish({
+local id, err = _G.PalEventDrop.publish({
     source = "MyMod",
     type = "my_event",
     title = "Optional title",
@@ -38,21 +39,21 @@ local id, err = _G.PalMaildir.publish({
 })
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for layout, schema, and consumer contract.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for folder layout, schema, and watcher contract.
 
 ## Watcher (gaming PC)
 
-Creates `new/`, `proc/`, and `failed/` under `%LOCALAPPDATA%\Pal\Saved\PalMaildir\`.
+Default root: `%LOCALAPPDATA%\Pal\Saved\PalEventDrop\` with subfolders `pending/`, `done/`, `failed/`.
 
 ```powershell
-cd path\to\PalMaildir
-infisical run --env=prod --path=/matrix -- python tools\palmail-watcher.py
+cd path\to\PalEventDrop
+infisical run --env=prod --path=/matrix -- python tools\event-watcher.py
 ```
 
 | Variable | Default |
 |----------|---------|
-| `PALMAILDIR_ROOT` | `%LOCALAPPDATA%\Pal\Saved\PalMaildir` |
-| `PALMAILDIR_STATE` | `...\PalMaildir\watcher-state.json` |
+| `PALEVENTDROP_ROOT` | `%LOCALAPPDATA%\Pal\Saved\PalEventDrop` |
+| `PALEVENTDROP_STATE` | `...\PalEventDrop\watcher-state.json` |
 | `APPRISE_NOTIFY_URL` | `https://apprise.moat.es/notify/palworld` |
 | `APPRISE_API_KEY` | required |
 
@@ -60,7 +61,7 @@ Homelab Apprise/Matrix setup: [docs/homelab.md](docs/homelab.md). Optional wrapp
 
 ## Test drop (no game)
 
-With the watcher running, create a file in `new/`:
+With the watcher running, create a file in `pending/`:
 
 ```json
 {"schema":1,"id":"test-1","ts":"2026-01-01T00:00:00Z","source":"manual","type":"test","title":"Test","message":"Hello","payload":{}}
@@ -70,11 +71,11 @@ Use a unique filename such as `0000000001_test.json`.
 
 ## Writing a producer mod
 
-1. Add `PalMaildir : 1` above your mod in `mods.txt`.
-2. After load, call `_G.PalMaildir.publish({ source = "YourMod", type = "...", ... })`.
+1. Add `PalEventDrop : 1` above your mod in `mods.txt`.
+2. After load, call `_G.PalEventDrop.publish({ source = "YourMod", type = "...", ... })`.
 3. Ship only hooks + event mapping — no file I/O in your mod.
 
-API surface: `_G.PalMaildir.VERSION`, `.SCHEMA`, `.publish(event)` → `id, err`.
+API surface: `_G.PalEventDrop.VERSION`, `.SCHEMA`, `.pending_dir()`, `.publish(event)` → `id, err`.
 
 ## License
 

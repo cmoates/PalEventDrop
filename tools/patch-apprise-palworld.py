@@ -46,10 +46,10 @@ print("patched", path)
 cm = Path.home() / "homelab-gitops/kubernetes/infrastructure/matrix/configmaps.yaml"
 cm_text = cm.read_text()
 needle = "  # matrix-monitoring -> Alertmanager webhook"
-if "# palworld -> PalMaildir watcher" not in cm_text:
+if "# palworld -> PalEventDrop watcher" not in cm_text:
     cm_text = cm_text.replace(
         needle,
-        "  # palworld -> PalMaildir watcher (gaming PC)\n" + needle,
+        "  # palworld -> PalEventDrop watcher (gaming PC)\n" + needle,
         1,
     )
     cm.write_text(cm_text)

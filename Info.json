@@ -1,9 +1,9 @@
 {
-  "ModName": "PalMaildir",
-  "PackageName": "PalMaildir",
+  "ModName": "PalEventDrop",
+  "PackageName": "PalEventDrop",
   "Version": "1.0.0",
   "Author": "Chris Moates",
-  "Description": "Maildir-style message bus for UE4SS (drop JSON into Saved/PalMaildir/new). Load before consumer mods.",
+  "Description": "Library mod: other UE4SS mods publish JSON events to Saved/PalEventDrop/pending. Load before producer mods.",
   "Dependencies": ["UE4SSExperimentalPW"],
   "Tags": ["UE4SS", "Library"],
   "InstallRule": [
