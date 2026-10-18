@@ -45,7 +45,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for folder layout, schema, and 
 
 ## Watcher (gaming PC)
 
-Default event root: `%LOCALAPPDATA%\Pal\Saved\PalEventDrop\` (`pending/`, `done/`, `failed/`).
+Default event root: `%LOCALAPPDATA%\Pal\Saved\PalEventDrop\` (`pending/`, `processing/`, `done/`, `failed/`). Run **one** watcher process at a time.
 
 ### Discord webhook (pick one)
 

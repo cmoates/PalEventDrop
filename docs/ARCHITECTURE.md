@@ -16,9 +16,10 @@ Other authors ship their own producer mods (treasure, base raid, egg hatch) with
 
 ```
 %LOCALAPPDATA%\Pal\Saved\PalEventDrop\
-  pending\   ← game mods write here (atomic tmp → rename)
-  done\      ← watcher moves here after successful delivery
-  failed\    ← watcher moves here on HTTP / parse errors
+  pending\     ← game mods write here (atomic tmp → rename)
+  processing\  ← watcher claims here (one file, one process)
+  done\        ← watcher moves here after successful delivery
+  failed\      ← watcher moves here on HTTP / parse errors
 ```
 
 Writers never read directories (UE4SS Lua cannot list dirs reliably). Unique filenames avoid collisions without locking.

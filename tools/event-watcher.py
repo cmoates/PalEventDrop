@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -19,6 +20,18 @@ DEFAULT_CONFIG_NAME = "watcher-config.json"
 POLL_SECONDS = 1.0
 MAX_SENT_IDS = 500
 
+# Palworld Steam capsule (Discord thumbnail)
+DEFAULT_THUMBNAIL = (
+    "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/1623730/capsule_231x87.jpg"
+)
+
+# event type -> (embed color, title emoji)
+TYPE_STYLE: dict[str, tuple[int, str]] = {
+    "expedition_complete": (0x3BA55C, "⛺"),
+    "test": (0x5865F2, "🧪"),
+}
+DEFAULT_STYLE = (0xE89540, "🎮")
+
 
 def env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
@@ -27,15 +40,15 @@ def env(name: str, default: str | None = None) -> str | None:
     return value.strip()
 
 
-def event_paths(root: Path) -> tuple[Path, Path, Path]:
-    return root / "pending", root / "done", root / "failed"
+def event_dirs(root: Path) -> tuple[Path, Path, Path, Path]:
+    return root / "pending", root / "processing", root / "done", root / "failed"
 
 
-def ensure_dirs(root: Path) -> tuple[Path, Path, Path]:
-    pending_dir, done_dir, failed_dir = event_paths(root)
-    for path in (root, pending_dir, done_dir, failed_dir):
+def ensure_dirs(root: Path) -> tuple[Path, Path, Path, Path]:
+    pending_dir, processing_dir, done_dir, failed_dir = event_dirs(root)
+    for path in (root, pending_dir, processing_dir, done_dir, failed_dir):
         path.mkdir(parents=True, exist_ok=True)
-    return pending_dir, done_dir, failed_dir
+    return pending_dir, processing_dir, done_dir, failed_dir
 
 
 def config_file_candidates(root: Path) -> list[Path]:
@@ -54,10 +67,11 @@ def load_config_file(path: Path) -> dict[str, Any]:
     return data
 
 
-def resolve_watcher_config(root: Path) -> tuple[str, str | None]:
-    """Return (discord_webhook_url, optional username). Env overrides file."""
+def resolve_watcher_config(root: Path) -> tuple[str, str | None, str | None]:
+    """Return (discord_webhook_url, optional username, optional avatar_url). Env overrides file."""
     webhook = env("DISCORD_WEBHOOK_URL")
     username = env("DISCORD_WEBHOOK_USERNAME")
+    avatar_url = env("DISCORD_WEBHOOK_AVATAR_URL")
 
     file_data: dict[str, Any] = {}
     config_path: Path | None = None
@@ -80,6 +94,11 @@ def resolve_watcher_config(root: Path) -> tuple[str, str | None]:
         if isinstance(raw, str) and raw.strip():
             username = raw.strip()
 
+    if not avatar_url:
+        raw = file_data.get("discord_avatar_url") or file_data.get("avatar_url")
+        if isinstance(raw, str) and raw.strip():
+            avatar_url = raw.strip()
+
     if not webhook:
         paths = ", ".join(str(p) for p in config_file_candidates(root))
         raise RuntimeError(
@@ -93,7 +112,7 @@ def resolve_watcher_config(root: Path) -> tuple[str, str | None]:
     if config_path and not env("DISCORD_WEBHOOK_URL"):
         print(f"[event-watcher] config={config_path}")
 
-    return webhook, username
+    return webhook, username, avatar_url
 
 
 def load_state(path: Path) -> dict:
@@ -115,17 +134,87 @@ def save_state(path: Path, state: dict) -> None:
     tmp.replace(path)
 
 
-def post_discord(webhook_url: str, title: str, message: str, username: str | None) -> None:
-    body: dict[str, Any] = {
-        "embeds": [
-            {
-                "title": title[:256],
-                "description": message[:4096],
-            }
-        ],
+def humanize_event_type(event_type: str) -> str:
+    event_type = event_type.strip()
+    if not event_type:
+        return "Event"
+    return event_type.replace("_", " ").strip().title()
+
+
+def normalize_timestamp(ts: Any) -> str | None:
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    ts = ts.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", ts):
+        return ts if ts.endswith("Z") or "+" in ts else f"{ts}Z"
+    return None
+
+
+def build_embed(event: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(event.get("type") or "").strip()
+    title = str(event.get("title") or humanize_event_type(event_type) or "Palworld")
+    message = str(event.get("message") or event.get("type") or title).strip()
+    source = str(event.get("source") or "").strip()
+
+    color, emoji = TYPE_STYLE.get(event_type, DEFAULT_STYLE)
+    embed: dict[str, Any] = {
+        "title": f"{emoji} {title}"[:256],
+        "description": message[:4096] if message else "*No details*",
+        "color": color,
+        "thumbnail": {"url": DEFAULT_THUMBNAIL},
+        "footer": {"text": "Palworld · PalEventDrop"},
     }
+
+    ts = normalize_timestamp(event.get("ts"))
+    if ts:
+        embed["timestamp"] = ts
+
+    if source:
+        embed["author"] = {"name": source}
+
+    fields: list[dict[str, Any]] = []
+    if event_type:
+        fields.append(
+            {
+                "name": "Type",
+                "value": humanize_event_type(event_type)[:256],
+                "inline": True,
+            }
+        )
+
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if not isinstance(key, str):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                fields.append(
+                    {
+                        "name": key.replace("_", " ").title()[:256],
+                        "value": str(value)[:1024],
+                        "inline": True,
+                    }
+                )
+            if len(fields) >= 6:
+                break
+
+    if fields:
+        embed["fields"] = fields
+
+    return embed
+
+
+def post_discord(
+    webhook_url: str,
+    event: dict[str, Any],
+    username: str | None,
+    avatar_url: str | None,
+) -> None:
+    body: dict[str, Any] = {"embeds": [build_embed(event)]}
     if username:
         body["username"] = username[:80]
+    if avatar_url:
+        body["avatar_url"] = avatar_url[:512]
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -141,15 +230,24 @@ def post_discord(webhook_url: str, title: str, message: str, username: str | Non
         resp.read()
 
 
-def list_pending(pending_dir: Path) -> list[Path]:
-    if not pending_dir.is_dir():
+def list_json_files(directory: Path) -> list[Path]:
+    if not directory.is_dir():
         return []
     files = [
         p
-        for p in pending_dir.glob("*.json")
+        for p in directory.glob("*.json")
         if p.is_file() and not p.name.endswith(".tmp") and p.stat().st_size > 0
     ]
     return sorted(files, key=lambda p: p.name)
+
+
+def claim_pending(path: Path, processing_dir: Path) -> Path | None:
+    dest = processing_dir / path.name
+    try:
+        shutil.move(str(path), str(dest))
+        return dest
+    except OSError:
+        return None
 
 
 def process_file(
@@ -158,6 +256,7 @@ def process_file(
     failed_dir: Path,
     webhook_url: str,
     username: str | None,
+    avatar_url: str | None,
     state: dict,
 ) -> None:
     try:
@@ -178,6 +277,13 @@ def process_file(
             shutil.move(str(path), str(dest))
         return
 
+    if not isinstance(event, dict):
+        print(f"[event-watcher] bad json {path.name}: root must be object", file=sys.stderr)
+        dest = failed_dir / path.name
+        if path.exists():
+            shutil.move(str(path), str(dest))
+        return
+
     event_id = str(event.get("id") or "")
     if event_id and event_id in state["sent_ids"]:
         dest = done_dir / path.name
@@ -185,14 +291,8 @@ def process_file(
             shutil.move(str(path), str(dest))
         return
 
-    title = str(event.get("title") or "Palworld")
-    message = str(event.get("message") or event.get("type") or title)
-    source = str(event.get("source") or "")
-    if source:
-        message = f"[{source}] {message}"
-
     try:
-        post_discord(webhook_url, title, message, username)
+        post_discord(webhook_url, event, username, avatar_url)
     except (urllib.error.HTTPError, urllib.error.URLError) as exc:
         print(f"[event-watcher] discord failed {path.name}: {exc}", file=sys.stderr)
         dest = failed_dir / path.name
@@ -214,15 +314,25 @@ def poll_once(
     state_path: Path,
     webhook_url: str,
     username: str | None,
+    avatar_url: str | None,
 ) -> None:
-    pending_dir, done_dir, failed_dir = ensure_dirs(root)
+    pending_dir, processing_dir, done_dir, failed_dir = ensure_dirs(root)
     state = load_state(state_path)
 
-    for path in list_pending(pending_dir):
+    for path in list_json_files(processing_dir):
         try:
-            process_file(path, done_dir, failed_dir, webhook_url, username, state)
+            process_file(path, done_dir, failed_dir, webhook_url, username, avatar_url, state)
         except OSError as exc:
             print(f"[event-watcher] io error {path.name}: {exc}", file=sys.stderr)
+
+    for path in list_json_files(pending_dir):
+        claimed = claim_pending(path, processing_dir)
+        if not claimed:
+            continue
+        try:
+            process_file(claimed, done_dir, failed_dir, webhook_url, username, avatar_url, state)
+        except OSError as exc:
+            print(f"[event-watcher] io error {claimed.name}: {exc}", file=sys.stderr)
 
     save_state(state_path, state)
 
@@ -232,7 +342,7 @@ def main() -> int:
     state_path = Path(env("PALEVENTDROP_STATE", str(DEFAULT_STATE)))
 
     try:
-        webhook_url, username = resolve_watcher_config(root)
+        webhook_url, username, avatar_url = resolve_watcher_config(root)
     except RuntimeError as exc:
         print(f"[event-watcher] {exc}", file=sys.stderr)
         print(
@@ -248,9 +358,10 @@ def main() -> int:
     ensure_dirs(root)
     print(f"[event-watcher] events={root}")
     print("[event-watcher] notify=discord (webhook)")
+    print("[event-watcher] run a single watcher process (duplicates = double Discord posts)")
 
     while True:
-        poll_once(root, state_path, webhook_url, username)
+        poll_once(root, state_path, webhook_url, username, avatar_url)
         time.sleep(POLL_SECONDS)
 
 

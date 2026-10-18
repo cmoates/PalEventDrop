@@ -59,5 +59,5 @@ Move-Item -LiteralPath $tmp -Destination $final -Force
 
 Write-Host "Wrote $final"
 
-Write-Host "Watcher should move it to done/ and post to Apprise."
+Write-Host "Watcher should move it to done/ and post to Discord."
 
